@@ -60,8 +60,8 @@ node {
         stage('DeployToUnstable')  {
 
              echo "deploy image to unstable cluster"
-             sh './deployment/k8s/pipline/install_tools.sh "$k8s_cluster_version" '
-             sh './deployment/k8s/pipline/auth_cluster.sh "$ORG_ID" "$API_TOKEN" "service_name" unstable '
+             sh './deployment/k8s/pipeline/install_tools.sh "$k8s_cluster_version" '
+             sh './deployment/k8s/pipeline/auth_cluster.sh "$ORG_ID" "$API_TOKEN" "service_name" unstable '
         }
 
 
