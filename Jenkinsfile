@@ -10,7 +10,7 @@ node {
         println i
     }
 
-    echo "validate the environment variable"
+    echo "start validate environment variable"
 
     try {
         println "$ORG_ID"
@@ -20,6 +20,7 @@ node {
     }catch (MissingPropertyException e) {
          throw e
     }
+    echo "PASS  validate environment variable"
 
     echo "config the service"
 
@@ -59,9 +60,10 @@ node {
         stage('DeployToUnstable')  {
 
              echo "deploy image to unstable cluster"
-             sh './install_tools.sh "$k8s_cluster_version" '
-             sh './auth_cluster.sh "$ORG_ID" "$API_TOKEN" "service_name" unstable '
+             sh './deployment/k8s/pipline/install_tools.sh "$k8s_cluster_version" '
+             sh './deployment/k8s/pipline/auth_cluster.sh "$ORG_ID" "$API_TOKEN" "service_name" unstable '
         }
+
 
         stage('RunIntegrationTest') {
 
