@@ -1,0 +1,71 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: audit-trail
+  namespace: ${NAMESPACE}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      role: audit-trail
+  template:
+    metadata:
+      labels:
+        role: audit-trail
+    spec:
+      containers:
+      - name: audit-trail
+        image: vmware-docker-audit-trail.bintray.io/audit-trail:${AUDIT_TRAIL_IMAGE_VERSION}
+        env:
+          - name: AWS_ACCESS_KEY_ID
+            valueFrom:
+              secretKeyRef:
+                name: ${AWS_SECRET_NAME}
+                key: aws-access-id
+          - name: AWS_SECRET_ACCESS_KEY
+            valueFrom:
+              secretKeyRef:
+                name: ${AWS_SECRET_NAME}
+                key: aws-secret-access-key
+          - name: REGION
+            valueFrom:
+              configMapKeyRef:
+                name: ${CONFIG_MAP_NAME}
+                key: region
+          - name: AUDIT_TRAIL_EVENT_STREAM_NAME
+            valueFrom:
+              configMapKeyRef:
+                name: ${CONFIG_MAP_NAME}
+                key: streamName
+          - name: AUDIT_TRAIL_S3_BUCKET_NAME
+            valueFrom:
+              configMapKeyRef:
+                name: ${CONFIG_MAP_NAME}
+                key: s3BucketName
+          - name: INSTANCE_ID
+            valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          - name: METRICS_ENABLED
+            valueFrom:
+              configMapKeyRef:
+                name: ${CONFIG_MAP_NAME}
+                key: metricsEnabled
+          - name: WAVEFRONT_PROXY
+            valueFrom:
+              configMapKeyRef:
+                name: ${CONFIG_MAP_NAME}
+                key: wavefrontProxy
+        ports:
+          - name: liveness-port
+            containerPort: 443
+        livenessProbe:
+          httpGet:
+            path: /v1/available
+            port: liveness-port
+            scheme: HTTPS
+          initialDelaySeconds: 30
+          periodSeconds: 5
+      imagePullSecrets:
+      - name: ${IMAGE_SECRET_NAME}
