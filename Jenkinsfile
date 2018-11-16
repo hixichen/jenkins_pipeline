@@ -1,14 +1,10 @@
-node {
-    
-    sh 'env > env.txt'
-    for (String i : readFile('env.txt').split("\r?\n")) {
-        println i
+pipeline {
+  agent any
+  stages {
+    stage ('Initialize') {
+      steps {
+        echo 'Placeholder.'
+      }
     }
-
-    echo "validate the environment variable"
-
-
-    stage('Validate ENV') {
-        echo 'PASS ENV validation'
-    }
-} // end of pipeline
+  }
+}
