@@ -26,6 +26,10 @@ node {
 
     try {
 
+        stage('Checkout'){
+          checkout scm
+        }
+
         stage('PostCommit')  {
             echo "post commit"
             sh '''
