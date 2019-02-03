@@ -1,88 +1,176 @@
-#!/usr/bin/env groovy
+/*
+pipeline
+*/
 
-node {
+def BASE_DIR = "./deployment/k8s/helm"
 
-    currentBuild.result = "SUCCESS"
 
-    sh 'env > env.txt'
-
-    for (String i : readFile('env.txt').split("\r?\n")) {
-        println i
+pipeline {
+    agent {
+        node {
+            label 'nimbus-cloud'
+        }
     }
 
-    echo "start validate environment variable"
-
-    try {
-        println "$ORG_ID"
-        println "$API_TOKEN"
-        println "$BINTRAY_USER"
-        println "$BINTRAY_API_TOKEN"
-    }catch (MissingPropertyException e) {
-         throw e
+    environment {
+        K8S_VERSION = "v1.10.8"
+        BASE_DIR = "./deployment/k8s/helm"
+        CASCADE_CONFIG="./"
     }
-    echo "PASS  validate environment variable"
 
-    echo "config the service"
-
-    def service_name = "audit-trail"
-    def k8s_cluster_version = "v1.10.8"
-
-    try {
-
-        stage('Checkout'){
-          checkout scm
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout([
+                        $class: 'GitSCM',
+                        branches: [[name: '*/develop']],
+                        doGenerateSubmoduleConfigurations: false,
+                        extensions: [[$class: 'SubmoduleOption',
+                                      disableSubmodules: false,
+                                      parentCredentials: false,
+                                      recursiveSubmodules: true,
+                                      reference: '',
+                                      trackingSubmodules: false,
+                                      [$class: 'CleanBeforeCheckout']],
+                        submoduleCfg: [],
+                        userRemoteConfigs: [[credentialsId: 'photon-automation', refspec: 'refs/heads/develop:refs/heads/develop', url: 'git@gitlab.eng.vmware.com:cna/audit-trail.git']]
+                ])
+            }
         }
 
-        stage('PostCommit')  {
-            echo "post commit"
-            sh '''
-                                cat >.hmakerc <<EOF
-                                format: hypermake.v0
-                                settings:
-                                    docker:
-                                        cache: false
-                                EOF
-            '''
-            sh 'echo "$BINTRAY_USER"'
-            sh 'pwd&&ls'
+        stage('Build'){
+            steps {
+                sh '''
+                    cat > .hmakerc <<EOF
+                    format: hypermake.v0
+                    settings:
+                        docker:
+                            cache: false
+EOF'''
+                sh 'hmake build test check -R'
+
+
+                script {
+                    # Remove dangling docker images if they exist
+                    docker_image_ids=$(docker images -f "dangling=true" -q)
+                    if [ -n "$docker_image_ids" ]; then
+                      echo $docker_image_ids | xargs docker rmi
+                    fi
+                }
+
+            }
+        }
+
+        stage('UnitTest'){
+
+            environment {
+                    AUDIT_S3_BUCKET_NAME = "vmw-audit-trail-k8s-test"
+                    AUDIT_EVENT_STREAM_NAME="vmw-audit-trail-stream-k8s-test"
+                    K8S_DEPLOYMENT=true
+            }
+
+            steps {
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'cascade-test']]) {
+                         sh './bin/linux/audit-trail-test'
+                         echo 'PASS Integration Test'
+                }
+
+                script {
+                    BUILT_IMAGE_VERION = sh(returnStdout: true, script: 'git rev-parse --short HEAD').trim()
+                    echo "image version $BUILT_IMAGE_VERION"
+                }
+            }
         }
 
         stage('PushImage') {
-            script {
-                BUILT_IMAGE_VERSION = sh(returnStdout: true, script: 'git rev-parse --short HEAD').trim()
+            steps {
+                withCredentials([[$class: 'UsernamePasswordMultiBinding', credentialsId:'bintray-user',
+                        usernameVariable: 'BINTRAY_USER', passwordVariable: 'BINTRAY_API_TOKEN']]) {
+                    sh 'docker login -u $BINTRAY_USER -p $BINTRAY_API_KEY vmware-docker-audit-trail.bintray.io'
+                    sh 'docker tag audit-trail:test vmware-docker-audit-trail.bintray.io/audit-trail:$BUILT_IMAGE_VERION'
+                    sh 'docker push vmware-docker-audit-trail.bintray.io/audit-trail:$BUILT_IMAGE_VERION'
+                    echo 'push image to registry'
+                }
+            }
+        }
+
+        stage('DeployToUnstable') {
+            steps {
+                withCredentials([[$class: 'UsernamePasswordMultiBinding', credentialsId:'vke-audit-trail-dev',
+                        usernameVariable: 'ORG_ID', passwordVariable: 'API_TOKEN']]) {
+
+                      echo 'deploy image $BUILT_IMAGE_VERION to unstable'
+                      sh '$BASE_DIR/auth_cluster.sh $BASE_DIR/vke_cluster/unstable'
+                      sh '$BASE_DIR/upgrade_cluster.sh unstable $BUILT_IMAGE_VERION'
+                }
+            }
+        }
+
+        stage('TriggerIntegrationTest') {
+            steps {
+                echo "trigger audit trail e2e test job"
+                build job: 'audit-trail-e2e', propagate: true, wait: true
+            }
+        }
+
+        stage('DeployToStable') {
+            steps {
+                withCredentials([[$class: 'UsernamePasswordMultiBinding', credentialsId:'vke-audit-trail-dev',
+                        usernameVariable: 'ORG_ID', passwordVariable: 'API_TOKEN']]) {
+
+                       echo 'deploy image $BUILT_IMAGE_VERION to stable'
+                       sh '$BASE_DIR/auth_cluster.sh $BASE_DIR/vke_cluster/stable'
+                       sh '$BASE_DIR/upgrade_cluster.sh stable $BUILT_IMAGE_VERION'
+                }
+            }
+        }
+
+        stage('DeployToStaging') {
+            steps {
+                withCredentials([[$class: 'UsernamePasswordMultiBinding', credentialsId:'vke-audit-trail-dev',
+                        usernameVariable: 'ORG_ID', passwordVariable: 'API_TOKEN']]) {
+
+                        echo 'deploy image $BUILT_IMAGE_VERION to staging'
+                        sh '$BASE_DIR/auth_cluster.sh $BASE_DIR/vke_cluster/staging'
+                        sh '$BASE_DIR/upgrade_cluster.sh staging $BUILT_IMAGE_VERION'
+                }
+            }
+        }
+
+        stage('DeployToProd') {
+
+            when {
+                allOf {
+                    environment ignoreCase: true, name: 'DeployToProd', value: 'yes'
+                }
             }
 
-            echo "push image ${BUILT_IMAGE_VERSION}"
-            sh 'docker login -u "$BINTRAY_USER" -p "$BINTRAY_API_TOKEN" vmware-docker-audit-trail.bintray.io'
-            echo 'push image to registry'
+            steps {
+                withCredentials([[$class: 'UsernamePasswordMultiBinding', credentialsId:'vke-audit-trail-prod',
+                        usernameVariable: 'ORG_ID', passwordVariable: 'API_TOKEN']]) {
+                        // upgrade to three production region.
+                        echo 'deploy image $BUILT_IMAGE_VERION to prod-west-2'
+                        sh '$BASE_DIR/auth_cluster.sh $BASE_DIR/vke_cluster/prod-us-west-2'
+                        sh '$BASE_DIR/upgrade_cluster.sh prod-us-west-2 $BUILT_IMAGE_VERION'
+
+                        echo 'deploy image $BUILT_IMAGE_VERION to prod-us-east-1'
+                        sh '$BASE_DIR/auth_cluster.sh $BASE_DIR/vke_cluster/prod-us-east-1'
+                        sh '$BASE_DIR/upgrade_cluster.sh prod-us-west-2 $BUILT_IMAGE_VERION'
+
+                        echo 'deploy image $BUILT_IMAGE_VERION to prod-eu-west-1'
+                        sh '$BASE_DIR/auth_cluster.sh $BASE_DIR/vke_cluster/prod-eu-west-1'
+                        sh '$BASE_DIR/upgrade_cluster.sh prod-us-west-2 $BUILT_IMAGE_VERION'
+                }
+            }
+
         }
+    } // end of stages
 
-        stage('DeployToUnstable')  {
-
-             echo "deploy image to unstable cluster"
-             echo "$k8s_cluster_version"
-             sh './deployment/k8s/pipeline/install_tools.sh "$k8s_cluster_version" '
-             sh './deployment/k8s/pipeline/auth_cluster.sh "$ORG_ID" "$API_TOKEN" "service_name" unstable '
-        }
-
-
-        stage('RunIntegrationTest') {
-
-              def K8S_DEPLOYMENT = true
-              def AUDIT_S3_BUCKET_NAME = "audit-trail-k8s-unstable"
-              def AUDIT_EVENT_STREAM_NAME = "audit-stream-k8s-unstable"
-              echo 'PASS Integration Test'
-        }
-    }
-
-    catch (err) {
-        currentBuild.result = "FAILURE"
-        throw err
-    }
-
-    finally {
-        stage('CleanImages') {
-          sh 'docker images -q -f dangling=true | xargs --no-run-if-empty docker rmi'
+    post {
+        failure {
+        mail to: '$env.mailList',
+            subject: "Failed Pipeline: ${currentBuild.fullDisplayName}",
+            body: "AuditTrail Pipeline failed, please check ${env.BUILD_URL}"
         }
     }
-}
+} // end of pipeline
