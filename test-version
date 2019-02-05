@@ -1,0 +1,84 @@
+pipeline {
+    agent {
+        node {
+            label 'nimbus-cloud'
+        }
+    }
+    
+    environment {
+        K8S_DEPLOYMENT=true
+        K8S_VERSION = "v1.10.8"
+        BASE_DIR = "./deployment/k8s/helm"
+        CASCADE_CONFIG="./"
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                    checkout([
+                        $class: 'GitSCM',
+                        branches: [[name: '*/develop']],
+                        doGenerateSubmoduleConfigurations: false,
+                        extensions: [[$class: 'SubmoduleOption',
+                                      disableSubmodules: false,
+                                      parentCredentials: true,
+                                      recursiveSubmodules: true,
+                                      reference: '',
+                                      trackingSubmodules: false]],
+                        submoduleCfg: [],
+                        userRemoteConfigs: [[credentialsId: 'photon-automation', refspec: 'refs/heads/develop:refs/heads/develop', url: 'git@gitlab.eng.vmware.com:cna/audit-trail.git']]
+                    ])
+            }
+        }
+        stage('Build'){
+            steps {
+                sh '''
+                    cat > .hmakerc <<EOF
+                    format: hypermake.v0
+                    settings:
+                        docker:
+                            cache: false
+EOF'''
+                
+                sh 'hmake build'
+                sh 'docker info'
+            }
+        }
+        
+        stage('UnitTest'){
+            environment { 
+                    AUDIT_S3_BUCKET_NAME = "vmw-audit-trail-k8s-test"
+                    AUDIT_EVENT_STREAM_NAME="vmw-audit-trail-stream-k8s-test"
+            }
+            
+            steps {
+                withCredentials([[$class: 'AmazonWebServicesCredentialsBinding', credentialsId: 'cascade-test']]) {
+                         sh './bin/linux/audit-trail-test'
+                         echo 'PASS Integration Test'
+                }
+            }
+        }
+
+        stage('PushImage') {
+            environment { 
+                BUILT_IMAGE_VERION = sh(returnStdout: true, script: 'git rev-parse --short HEAD').trim()
+            }
+            steps {   
+                echo "image version $BUILT_IMAGE_VERION"
+                sh 'docker login -u $BINTRAY_USER -p $BINTRAY_API_KEY vmware-docker-audit-trail.bintray.io'
+                sh 'docker tag audit-trail:test vmware-docker-audit-trail.bintray.io/audit-trail:$BUILT_IMAGE_VERION'
+                sh 'docker push vmware-docker-audit-trail.bintray.io/audit-trail:$BUILT_IMAGE_VERION'
+                echo 'push image to registry vmware-docker-audit-trail.bintray.io'
+            }
+        }
+    }
+    
+    post {
+        failure {
+        // notify users when the Pipeline fails
+        mail to: 'chenxi@vmware.com',
+            subject: "Failed Pipeline: ${currentBuild.fullDisplayName}",
+            body: "Failed Jenkins job ${env.BUILD_URL}"
+        }
+    }
+}
