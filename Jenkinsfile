@@ -159,10 +159,10 @@ EOF'''
     } // end of stages
 
     post {
-        failure {
-        mail to: "$env.mailList",
-            subject: "Failed Pipeline: ${currentBuild.fullDisplayName}",
-            body: "AuditTrail Pipeline failed, please check ${env.BUILD_URL}"
+        always {
+            mail to: "$env.mailList",
+            subject: "Pipeline: ${currentBuild.fullDisplayName}",
+            body: "AuditTrail Pipeline Job, please check ${env.BUILD_URL}"
         }
     }
 } // end of pipeline
