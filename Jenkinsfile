@@ -40,6 +40,13 @@ pipeline {
 
         stage('Build'){
             steps {
+
+                sh '''
+                echo "Downloading hmake..."
+                wget https://github.com/evo-cloud/hmake/releases/download/v1.3.1/hmake-linux-amd64.tar.gz
+                sudo tar -C /usr/local/bin -zxf hmake-linux-amd64.tar.gz
+                '''
+
                 sh '''
                     cat > .hmakerc <<EOF
                     format: hypermake.v0
