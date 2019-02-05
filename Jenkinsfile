@@ -153,7 +153,7 @@ EOF'''
 
     post {
         failure {
-        mail to: '$env.mailList',
+        mail to: "$env.mailList",
             subject: "Failed Pipeline: ${currentBuild.fullDisplayName}",
             body: "AuditTrail Pipeline failed, please check ${env.BUILD_URL}"
         }
